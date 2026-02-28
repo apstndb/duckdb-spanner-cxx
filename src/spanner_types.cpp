@@ -432,7 +432,7 @@ spanner::Value DuckDBValueToSpanner(const Value &duck_val, const LogicalType &ty
 		case LogicalTypeId::TINYINT:
 			return spanner::Value(std::optional<std::int64_t>());
 		case LogicalTypeId::FLOAT:
-			return spanner::Value(std::optional<double>());
+			return spanner::Value(std::optional<float>());
 		case LogicalTypeId::DOUBLE:
 			return spanner::Value(std::optional<double>());
 		case LogicalTypeId::DECIMAL:
@@ -461,7 +461,7 @@ spanner::Value DuckDBValueToSpanner(const Value &duck_val, const LogicalType &ty
 	case LogicalTypeId::BIGINT:
 		return spanner::Value(duck_val.GetValue<int64_t>());
 	case LogicalTypeId::FLOAT:
-		return spanner::Value(static_cast<double>(duck_val.GetValue<float>()));
+		return spanner::Value(duck_val.GetValue<float>());
 	case LogicalTypeId::DOUBLE:
 		return spanner::Value(duck_val.GetValue<double>());
 	case LogicalTypeId::DECIMAL: {

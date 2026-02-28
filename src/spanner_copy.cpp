@@ -15,7 +15,9 @@ namespace duckdb {
 
 namespace spanner = google::cloud::spanner;
 
-// Spanner's per-commit mutation limit (as of Dec 2023)
+// Spanner's per-commit mutation limit (as of Dec 2023).
+// InsertOrUpdate counts as (1 + column_count) per new row, column_count per existing row.
+// We use a conservative estimate of (1 + column_count) per row.
 static constexpr idx_t SPANNER_MUTATION_LIMIT = 80000;
 
 // ─── Bind data ──────────────────────────────────────────────────────────────
@@ -48,10 +50,11 @@ struct SpannerCopyBindData : public FunctionData {
 struct SpannerCopyGlobalState : public GlobalFunctionData {
 	std::shared_ptr<spanner::Client> client;
 	std::string table;
+	idx_t column_count = 0;
 
 	// Accumulated mutations to commit
 	std::vector<spanner::Mutation> pending_mutations;
-	idx_t pending_row_count = 0;
+	idx_t pending_mutation_estimate = 0;
 	idx_t total_rows = 0;
 	idx_t total_commits = 0;
 	std::mutex lock;
@@ -62,28 +65,43 @@ struct SpannerCopyGlobalState : public GlobalFunctionData {
 struct SpannerCopyLocalState : public LocalFunctionData {
 	std::vector<spanner::Mutation> local_mutations;
 	idx_t local_row_count = 0;
+	idx_t local_mutation_estimate = 0;
 };
 
-// ─── Helper: flush pending mutations ────────────────────────────────────────
+// ─── Helper: commit mutations with retry-halving on mutation limit errors ──
 
-static void FlushMutations(SpannerCopyGlobalState &global) {
-	if (global.pending_mutations.empty()) {
+static void CommitMutations(spanner::Client &client, std::vector<spanner::Mutation> mutations,
+                            idx_t &commit_count) {
+	if (mutations.empty()) {
 		return;
 	}
 
-	auto mutations = std::move(global.pending_mutations);
-	global.pending_mutations.clear();
-	global.pending_row_count = 0;
-
-	auto commit_result = global.client->Commit(
+	auto commit_result = client.Commit(
 	    [&mutations](spanner::Transaction const &) -> spanner::Mutations {
 		    return spanner::Mutations(mutations.begin(), mutations.end());
 	    });
 
-	if (!commit_result.ok()) {
-		throw IOException("Spanner commit failed: %s", commit_result.status().message());
+	if (commit_result.ok()) {
+		commit_count++;
+		return;
 	}
-	global.total_commits++;
+
+	// On INVALID_ARGUMENT (likely mutation limit exceeded), split and retry
+	if (commit_result.status().code() == google::cloud::StatusCode::kInvalidArgument &&
+	    mutations.size() > 1) {
+		auto mid = static_cast<ptrdiff_t>(mutations.size() / 2);
+		std::vector<spanner::Mutation> first_half(
+		    std::make_move_iterator(mutations.begin()),
+		    std::make_move_iterator(mutations.begin() + mid));
+		std::vector<spanner::Mutation> second_half(
+		    std::make_move_iterator(mutations.begin() + mid),
+		    std::make_move_iterator(mutations.end()));
+		CommitMutations(client, std::move(first_half), commit_count);
+		CommitMutations(client, std::move(second_half), commit_count);
+		return;
+	}
+
+	throw IOException("Spanner commit failed: %s", commit_result.status().message());
 }
 
 // ─── Bind ───────────────────────────────────────────────────────────────────
@@ -130,6 +148,7 @@ static unique_ptr<GlobalFunctionData> SpannerCopyInitGlobal(ClientContext &conte
 	state->client = GetOrCreateClient(db, data.endpoint);
 	auto [schema, table] = ParseTableName(data.table_name);
 	state->table = table;
+	state->column_count = data.column_names.size();
 
 	return std::move(state);
 }
@@ -162,6 +181,8 @@ static void SpannerCopySink(ExecutionContext &context, FunctionData &bind_data,
 
 	local.local_mutations.push_back(builder.Build());
 	local.local_row_count += input.size();
+	// Conservative estimate: InsertOrUpdate = (1 + columns) per row for new rows
+	local.local_mutation_estimate += input.size() * (1 + global.column_count);
 }
 
 // ─── Combine ────────────────────────────────────────────────────────────────
@@ -171,17 +192,30 @@ static void SpannerCopyCombine(ExecutionContext &context, FunctionData &bind_dat
 	auto &global = gstate.Cast<SpannerCopyGlobalState>();
 	auto &local = lstate.Cast<SpannerCopyLocalState>();
 
-	std::lock_guard<std::mutex> guard(global.lock);
-	global.total_rows += local.local_row_count;
+	std::vector<spanner::Mutation> to_flush;
 
-	for (auto &m : local.local_mutations) {
-		global.pending_mutations.push_back(std::move(m));
+	{
+		std::lock_guard<std::mutex> guard(global.lock);
+		global.total_rows += local.local_row_count;
+
+		for (auto &m : local.local_mutations) {
+			global.pending_mutations.push_back(std::move(m));
+		}
+		global.pending_mutation_estimate += local.local_mutation_estimate;
+
+		// Extract mutations to flush outside the lock
+		if (global.pending_mutation_estimate >= SPANNER_MUTATION_LIMIT) {
+			to_flush = std::move(global.pending_mutations);
+			global.pending_mutation_estimate = 0;
+		}
 	}
-	global.pending_row_count += local.local_row_count;
 
-	// Flush if we've exceeded the mutation limit
-	if (global.pending_row_count >= SPANNER_MUTATION_LIMIT) {
-		FlushMutations(global);
+	// Commit outside the lock to avoid blocking other threads
+	if (!to_flush.empty()) {
+		idx_t flush_commits = 0;
+		CommitMutations(*global.client, std::move(to_flush), flush_commits);
+		std::lock_guard<std::mutex> guard(global.lock);
+		global.total_commits += flush_commits;
 	}
 }
 
@@ -191,8 +225,10 @@ static void SpannerCopyFinalize(ClientContext &context, FunctionData &bind_data,
                                  GlobalFunctionData &gstate) {
 	auto &global = gstate.Cast<SpannerCopyGlobalState>();
 
-	// Flush remaining mutations
-	FlushMutations(global);
+	// Flush remaining mutations (single-threaded at this point)
+	idx_t flush_commits = 0;
+	CommitMutations(*global.client, std::move(global.pending_mutations), flush_commits);
+	global.total_commits += flush_commits;
 }
 
 // ─── Registration ───────────────────────────────────────────────────────────

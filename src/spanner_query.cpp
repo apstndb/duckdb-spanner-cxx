@@ -28,7 +28,6 @@ struct SpannerQueryBindData : public TableFunctionData {
 	std::string max_staleness_secs;
 	std::string read_timestamp;
 	std::string min_read_timestamp;
-	bool use_data_boost = false;
 
 	vector<string> column_names;
 	vector<LogicalType> column_types;
@@ -140,8 +139,6 @@ static unique_ptr<FunctionData> SpannerQueryBind(ClientContext &context, TableFu
 			bind_data->read_timestamp = str_val;
 		} else if (kv.first == "min_read_timestamp") {
 			bind_data->min_read_timestamp = str_val;
-		} else if (kv.first == "use_data_boost") {
-			bind_data->use_data_boost = val.GetValue<bool>();
 		}
 	}
 
@@ -262,8 +259,6 @@ void RegisterSpannerQueryFunction(ExtensionLoader &loader) {
 	query_raw.named_parameters["max_staleness_secs"] = LogicalType::BIGINT;
 	query_raw.named_parameters["read_timestamp"] = LogicalType::VARCHAR;
 	query_raw.named_parameters["min_read_timestamp"] = LogicalType::VARCHAR;
-	query_raw.named_parameters["use_data_boost"] = LogicalType::BOOLEAN;
-
 	loader.RegisterFunction(query_raw);
 }
 

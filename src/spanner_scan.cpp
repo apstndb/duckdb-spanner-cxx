@@ -25,7 +25,6 @@ struct SpannerScanBindData : public TableFunctionData {
 	std::string max_staleness_secs;
 	std::string read_timestamp;
 	std::string min_read_timestamp;
-	bool use_data_boost = false;
 
 	vector<string> column_names;
 	vector<LogicalType> column_types;
@@ -138,8 +137,6 @@ static unique_ptr<FunctionData> SpannerScanBind(ClientContext &context, TableFun
 			bind_data->read_timestamp = str_val;
 		} else if (kv.first == "min_read_timestamp") {
 			bind_data->min_read_timestamp = str_val;
-		} else if (kv.first == "use_data_boost") {
-			bind_data->use_data_boost = val.GetValue<bool>();
 		}
 	}
 
@@ -280,8 +277,6 @@ void RegisterSpannerScanFunction(ExtensionLoader &loader) {
 	scan.named_parameters["max_staleness_secs"] = LogicalType::BIGINT;
 	scan.named_parameters["read_timestamp"] = LogicalType::VARCHAR;
 	scan.named_parameters["min_read_timestamp"] = LogicalType::VARCHAR;
-	scan.named_parameters["use_data_boost"] = LogicalType::BOOLEAN;
-
 	scan.projection_pushdown = true;
 
 	loader.RegisterFunction(scan);

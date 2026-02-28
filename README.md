@@ -94,7 +94,6 @@ Both `spanner_query` and `spanner_scan` support:
 | Parameter | Type | Description |
 |---|---|---|
 | `index` | VARCHAR | Secondary index name |
-| `use_data_boost` | BOOLEAN | Enable Data Boost (reserved) |
 
 ## Running Tests
 
