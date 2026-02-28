@@ -1,0 +1,43 @@
+# name: test/sql/spanner.test
+# description: test spanner extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM spanner_query_raw('projects/test/instances/test/databases/test', 'SELECT 1');
+----
+Catalog Error
+
+# Require statement will ensure this test is run with this extension loaded
+require spanner
+
+# Test macros that don't depend on JSON extension
+query I
+SELECT _spanner_scalar_type_name('BIGINT');
+----
+INT64
+
+query I
+SELECT _spanner_type_name('BIGINT[]');
+----
+ARRAY<INT64>
+
+query I
+SELECT _spanner_type_name('DECIMAL(38,9)');
+----
+NUMERIC
+
+query I
+SELECT interval_to_iso8601(INTERVAL '1 year 3 months');
+----
+P1Y3M
+
+query I
+SELECT interval_to_iso8601(INTERVAL '2 hours 30 minutes');
+----
+PT2H30M
+
+query I
+SELECT interval_to_iso8601(INTERVAL '0 seconds');
+----
+PT0S

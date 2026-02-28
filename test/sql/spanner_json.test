@@ -1,0 +1,35 @@
+# name: test/sql/spanner_json.test
+# description: test spanner extension JSON-dependent macros
+# group: [sql]
+
+require spanner
+
+require json
+
+# Test spanner_typed
+query I
+SELECT spanner_typed(42, 'INT64')::VARCHAR;
+----
+{"value":42,"type":"INT64"}
+
+# Test spanner_value
+query I
+SELECT spanner_value(42::BIGINT)::VARCHAR;
+----
+{"value":42,"type":"INT64"}
+
+query I
+SELECT spanner_value(NULL::BIGINT)::VARCHAR;
+----
+{"value":null,"type":"INT64"}
+
+query I
+SELECT spanner_value('hello')::VARCHAR;
+----
+{"value":"hello","type":"STRING"}
+
+# Test spanner_params
+query I
+SELECT spanner_params({'age': 25, 'name': 'Alice'});
+----
+{"age":25,"name":"Alice"}
